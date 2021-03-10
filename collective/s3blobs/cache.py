@@ -17,25 +17,30 @@ class S3BlobCache(object):
     First tries to get the blob from the (local) underlying storage,
     then tries S3.
     """
-
-    def __init__(
-            self, storage, cache_dir, bucket_name,
-            aws_access_key_id=None, aws_secret_access_key=None,
-            cache_size=20 * ZEO.ClientStorage.MB):
+    def __init__(self,
+                 storage,
+                 cache_dir,
+                 bucket_name,
+                 aws_access_key_id=None,
+                 aws_secret_access_key=None,
+                 cache_size=20 * ZEO.ClientStorage.MB):
         self.storage = storage
 
         session = boto3.Session(
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
         )
-        self.bucket = session.resource('s3').Bucket(bucket_name)
+        self.bucket = session.resource(
+            's3',
+            endpoint_url='https://s3.sbg.cloud.ovh.net',
+            region_name='sbg').Bucket(bucket_name)
         self.cache_dir = cache_dir
 
         # Initialize blob cache directory
         if 'zeocache' not in ZODB.blob.LAYOUTS:
             ZODB.blob.LAYOUTS['zeocache'] = ZEO.ClientStorage.BlobCacheLayout()
-        self.fshelper = ZODB.blob.FilesystemHelper(
-            cache_dir, layout_name='zeocache')
+        self.fshelper = ZODB.blob.FilesystemHelper(cache_dir,
+                                                   layout_name='zeocache')
         self.fshelper.create()
         self.fshelper.checkSecure()
 
@@ -51,13 +56,21 @@ class S3BlobCache(object):
     def __getattr__(self, name):
         return getattr(self.storage, name)
 
+    def new_instance(self, adapter=None):
+        storage = self.storage.new_instance()
+        cache = S3BlobCache(storage, self.cache_dir, self.bucket.name, "", "",
+                            self._blob_cache_size)
+        cache.bucket = self.bucket
+        self.storage.blobhelper = cache
+        return storage
+
     def __len__(self):
         return len(self.storage)
 
     def __repr__(self):
         normal_storage = self.storage
-        return '<S3BlobCache proxy for %r at %s>' % (
-            normal_storage, hex(id(self)))
+        return '<S3BlobCache proxy for %r at %s>' % (normal_storage,
+                                                     hex(id(self)))
 
     def isBlobLocal(self, oid, serial):
         """Check if blob can be found in the underlying storage.
@@ -79,7 +92,8 @@ class S3BlobCache(object):
         start = time.time()
         try:
             blob_filename = self.storage.loadBlob(oid, serial)
-            logger.debug('Fetched blob from ZEO in %ss' % (time.time() - start))
+            logger.debug('Fetched blob from ZEO in %ss' %
+                         (time.time() - start))
         except ZODB.POSException.POSKeyError:
             blob_filename = self.loadS3Blob(oid, serial)
             logger.debug('Fetched blob from S3 in %ss' % (time.time() - start))
@@ -169,6 +183,7 @@ class S3BlobCache(object):
             self._check_blob_size_thread.join()
 
     _check_blob_size_thread = None
+
     def _check_blob_size(self, bytes=None):
         if self._blob_cache_size is None:
             return
@@ -183,7 +198,7 @@ class S3BlobCache(object):
         check_blob_size_thread = threading.Thread(
             target=ZEO.ClientStorage._check_blob_cache_size,
             args=(self.cache_dir, target),
-            )
+        )
         check_blob_size_thread.setDaemon(True)
         check_blob_size_thread.start()
         self._check_blob_size_thread = check_blob_size_thread

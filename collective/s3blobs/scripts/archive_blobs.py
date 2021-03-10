@@ -18,17 +18,30 @@ logger = logging.getLogger(__name__)
 parser = argparse.ArgumentParser(description='Archive blobs to S3')
 parser.add_argument('blob_dir', help='Path to local blobstorage directory')
 parser.add_argument('bucket_name', help='S3 bucket name')
+parser.add_argument('-e', '--endpoint-url', help='Endpoint URL')
+parser.add_argument('-r', '--region', help='Id of the region')
 parser.add_argument(
-    '-a', '--age', type=int, default=1,
-    help='Only archive blobs created more than this many days ago. (Default: 1)')
+    '-a',
+    '--age',
+    type=int,
+    default=1,
+    help='Only archive blobs created more than this many days ago. (Default: 1)'
+)
 parser.add_argument(
-    '-s', '--size', type=int, default=0,
+    '-s',
+    '--size',
+    type=int,
+    default=0,
     help='Only archive blobs more than this many bytes in size. (Default: 0)')
+parser.add_argument('-d',
+                    '--destroy',
+                    action='store_true',
+                    dest='exterminate',
+                    help='Destroy local file after archiving?')
 parser.add_argument(
-    '-d', '--destroy', action='store_true', dest='exterminate',
-    help='Destroy local file after archiving?')
-parser.add_argument(
-    '-b', '--backup', action='store_true',
+    '-b',
+    '--backup',
+    action='store_true',
     help='Move destroyed files to add .bak extension rather than deleting')
 
 
@@ -38,11 +51,13 @@ def main():
 
     aws_access_key_id = os.environ.get('aws_access_key_id')
     aws_secret_access_key = os.environ.get('aws_secret_access_key')
-
+    endpoint = args.endpoint_url or None
+    region = args.region or None
     bucket = boto3.Session(
         aws_access_key_id=aws_access_key_id,
         aws_secret_access_key=aws_secret_access_key,
-    ).resource('s3').Bucket(args.bucket_name)
+    ).resource('s3', endpoint_url=endpoint,
+               region_name=region).Bucket(args.bucket_name)
 
     # Get list of files that already exist in the bucket
     existing = set(obj.key for obj in bucket.objects.all())
@@ -83,26 +98,28 @@ def main():
                 extra_args = {
                     'ContentType': magic.from_file(filepath, mime=True)
                 }
-                bucket.upload_file(
-                    filepath, blob_filename, ExtraArgs=extra_args)
+                bucket.upload_file(filepath,
+                                   blob_filename,
+                                   ExtraArgs=extra_args)
 
                 # Log
                 count += 1
                 total_size += size
-                logger.info(
-                    'Uploaded {} to S3 ({}).'.format(blob_filename, size))
+                logger.info('Uploaded {} to S3 ({}).'.format(
+                    blob_filename, size))
 
             # Remove local file
             if args.exterminate:
                 if args.backup:
                     os.rename(filepath, '{}.bak'.format(filepath))
-                    logger.info('Moved {} to {}.bak'.format(filepath, filepath))
+                    logger.info('Moved {} to {}.bak'.format(
+                        filepath, filepath))
                 else:
                     os.remove(filepath)
                     logger.info('Deleted {}'.format(filepath))
 
     if count:
-        logger.info(
-            'Done uploading {} files to S3. ({})'.format(count, total_size))
+        logger.info('Done uploading {} files to S3. ({})'.format(
+            count, total_size))
     else:
         logger.info("Found no new files to upload to S3.")
